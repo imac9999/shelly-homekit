@@ -327,94 +327,74 @@ void GarageDoorOpener::SetTgtState(State new_state, const char *src) {
 }
 
 void GarageDoorOpener::RunOnce() {
-  int is_closed, is_open;
-  GetInputsState(&is_closed, &is_open);
-  LOG(LL_DEBUG,
-      ("GDO %d: cur %s tgt %s is_closed %d is_open %d", id(),
-       StateStr(cur_state_), StateStr(tgt_state_), is_closed, is_open));
-  if (cur_state_ != State::kStopped && is_closed && is_open == 1) {
-    LOG(LL_ERROR, ("Both sensors active, error"));
-    SetCurState(State::kStopped);
-  }
-  switch (cur_state_) {
-    case State::kOpen: {
-      if (is_closed) {  // Closed externally.
-        SetTgtState(State::kClosed, "ext");
-        SetCurState(State::kClosed);
-        break;
-      }
-      if (!is_open) {
-        SetTgtState(State::kClosed, "ext");
-        SetCurState(State::kClosing);
-      }
-      break;
-    }
-    case State::kClosed: {
-      if (!is_closed) {
-        SetTgtState(State::kOpen, "ext");
-        SetCurState(State::kOpening);
-      }
-      break;
-    }
-    case State::kOpening: {
-      int64_t elapsed_ms = (mgos_uptime_micros() - begin_) / 1000;
-      if (is_open != -1) {
-        if (is_open) {
-          SetCurState(State::kOpen);
-          break;
+    int is_closed, is_open;
+    GetInputsState(&is_closed, &is_open);
+
+    switch (cur_state_) {
+        case State::kOpen: {
+            // Wenn der Sensor NICHT geschlossen ist, bedeutet das,
+            // dass das Tor sich bewegt oder geschlossen ist
+            if (!is_closed) {
+                SetTgtState(State::kClosed, "ext");
+                SetCurState(State::kClosing);
+            }
+            break;
         }
-        if (elapsed_ms > cfg_->move_time_ms) {
-          obstruction_detected_ = true;
-          SetCurState(State::kStopped);
-          break;
+
+        case State::kClosed: {
+            // Wenn der Sensor geschlossen ist, bedeutet das,
+            // dass das Tor vollständig geöffnet ist
+            if (is_closed) {
+                SetTgtState(State::kOpen, "ext");
+                SetCurState(State::kOpening);
+            }
+            break;
         }
-      } else {
-        if (elapsed_ms > cfg_->move_time_ms) {
-          SetCurState(State::kOpen);
-          break;
+
+        case State::kOpening: {
+            int64_t elapsed_ms = (mgos_uptime_micros() - begin_) / 1000;
+            // Tor ist vollständig geöffnet wenn Sensor geschlossen
+            if (is_closed) {
+                SetCurState(State::kOpen);
+                break;
+            }
+            // Timeout nach konfigurierter Zeit
+            if (elapsed_ms > cfg_->move_time_ms) {
+                obstruction_detected_ = true;
+                SetCurState(State::kStopped);
+            }
+            break;
         }
-      }
-      if (is_closed && elapsed_ms > cfg_->begin_move_time_ms) {
-        SetTgtState(State::kClosed, "ext");
-        SetCurState(State::kClosed);
-      }
-      break;
+
+        case State::kClosing: {
+            int64_t elapsed_ms = (mgos_uptime_micros() - begin_) / 1000;
+            // Tor ist geschlossen wenn Sensor geöffnet ist und
+            // die Mindestzeit abgelaufen ist
+            if (!is_closed && elapsed_ms > cfg_->move_time_ms) {
+                SetCurState(State::kClosed);
+                break;
+            }
+            // Bei Hindernis
+            if (elapsed_ms > cfg_->move_time_ms) {
+                obstruction_detected_ = true;
+                SetCurState(State::kStopped);
+            }
+            break;
+        }
+
+        case State::kStopped: {
+            if (is_closed) {
+                SetTgtState(State::kOpen, "ext");
+                SetCurState(State::kOpen);
+            } else {
+                SetTgtState(State::kClosed, "ext");
+                SetCurState(State::kClosed);
+            }
+            break;
+        }
     }
-    case State::kClosing: {
-      if (is_closed) {
-        SetCurState(State::kClosed);
-        break;
-      }
-      int64_t elapsed_ms = (mgos_uptime_micros() - begin_) / 1000;
-      if (elapsed_ms > cfg_->move_time_ms) {
-        obstruction_detected_ = true;
-        SetCurState(State::kStopped);
-        break;
-      }
-      if (is_open == 1 && elapsed_ms > cfg_->begin_move_time_ms) {
-        SetTgtState(State::kOpen, "ext");
-        SetCurState(State::kOpen);
-      }
-      break;
-    }
-    case State::kStopped: {
-      if (is_closed && is_open == 1) {
-        break;
-      }
-      if (is_closed) {
-        SetTgtState(State::kClosed, "ext");
-        SetCurState(State::kClosed);
-        break;
-      }
-      if (is_open == 1) {
-        SetTgtState(State::kOpen, "ext");
-        SetCurState(State::kOpen);
-        break;
-      }
-      break;
-    }
-  }
 }
+
 
 void CreateHAPGDO(int id, Input *in_close, Input *in_open, Output *out_close,
                   Output *out_open, const struct mgos_config_gdo *gdo_cfg,
